@@ -1,0 +1,16 @@
+services:
+  postgres-integration:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: fulltext-rss-reader_integration_test
+      POSTGRES_USER: fulltext-rss-reader_test
+      POSTGRES_PASSWORD: fulltext-rss-reader_test
+    ports:
+      - "127.0.0.1:${INTEGRATION_POSTGRES_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fulltext-rss-reader_test -d fulltext-rss-reader_integration_test"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data

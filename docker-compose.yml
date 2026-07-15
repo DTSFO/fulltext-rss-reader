@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fulltext-rss-reader}
+      POSTGRES_USER: ${POSTGRES_USER:-fulltext-rss-reader}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fulltext-rss-reader}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  web:
+    build: .
+    command: ["node", "server.js"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-fulltext-rss-reader}:${POSTGRES_PASSWORD:-fulltext-rss-reader}@postgres:5432/${POSTGRES_DB:-fulltext-rss-reader}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${APP_PORT:-18120}:3000"
+
+  worker:
+    build: .
+    command: ["node", "--conditions=react-server", "dist/jobs/refresh-worker.mjs"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-fulltext-rss-reader}:${POSTGRES_PASSWORD:-fulltext-rss-reader}@postgres:5432/${POSTGRES_DB:-fulltext-rss-reader}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    command: ["node", "--conditions=react-server", "dist/db/migrate.mjs"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-fulltext-rss-reader}:${POSTGRES_PASSWORD:-fulltext-rss-reader}@postgres:5432/${POSTGRES_DB:-fulltext-rss-reader}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  postgres-data:

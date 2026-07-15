@@ -1,0 +1,8 @@
+packages:
+  - "."
+
+allowBuilds:
+  "@node-rs/argon2": true
+  esbuild: true
+  sharp: true
+  unrs-resolver: true
