@@ -2,7 +2,7 @@
 
 A single-user RSS/Atom reader with full-text extraction, a background refresh worker, guarded remote fetching, and versioned appearance settings.
 
-[Live demo](https://dtsfo.github.io/fulltext-rss-reader/) | [Architecture](docs/architecture.md) | [Security](SECURITY.md)
+[Live demo](https://rss-demo.713007.xyz/) | [Static demo (GitHub Pages)](https://dtsfo.github.io/fulltext-rss-reader/) | [Architecture](docs/architecture.md) | [Security](SECURITY.md)
 
 ![CI](https://github.com/DTSFO/fulltext-rss-reader/actions/workflows/ci.yml/badge.svg)
 
@@ -19,9 +19,13 @@ A single-user RSS/Atom reader with full-text extraction, a background refresh wo
 - Theme editing, preview, import/export, leases, and recovery
 - Vitest, Testing Library, Playwright, and integration test coverage
 
-## Demo boundary
+## Demos
 
-The GitHub Pages demo is a static React build with embedded example feeds. Search, filters, read state, article selection, and starring are interactive in memory. It does not fetch external URLs, store credentials, connect to PostgreSQL, or expose a production account.
+The hosted demo runs the authenticated application with a disposable PostgreSQL database. Sign in with `demo-user` / `demo-reader` to add RSS subscriptions and try theme editing, preview, import, and export. To keep the shared instance bounded, it allows five feeds, three custom themes, fifty retained articles per feed, one new subscription attempt per shared account each minute, and one manual refresh per feed every ten minutes. Invented seed data is restored every six hours.
+
+This is a shared public account. Do not add private, authenticated, or credential-bearing feed URLs.
+
+The GitHub Pages demo remains a static React build with embedded example feeds. Search, filters, read state, article selection, and starring are interactive in memory. It does not fetch external URLs, store credentials, connect to PostgreSQL, or expose an account.
 
 ## Local development
 
@@ -43,6 +47,8 @@ Run the public static demo separately:
 ```bash
 pnpm demo:dev
 ```
+
+For an isolated authenticated demo on a VPS, use docker-compose.demo.yml and the deterministic reset/seed workflow documented in [Hosted demo](docs/hosted-demo.md). This stack binds only to a loopback port, uses a separate PostgreSQL volume, and does not start the background refresh worker.
 
 ## Verification
 
@@ -72,6 +78,8 @@ pnpm test:e2e
 | `src/db` and `drizzle` | Schema, migrations, and database access |
 | `tests` | Browser and integration scenarios |
 | `demo` | Static portfolio demo deployed to GitHub Pages |
+| `docker-compose.demo.yml` | Isolated authenticated hosted-demo stack |
+| `scripts/demo-stack.sh` and `scripts/demo-seed.sql` | Demo lifecycle and deterministic reset data |
 
 ## Public edition
 

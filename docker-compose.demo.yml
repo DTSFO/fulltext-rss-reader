@@ -1,0 +1,107 @@
+name: fulltext-rss-reader-demo
+
+x-app-environment: &app-environment
+  NODE_ENV: production
+  APP_URL: ${DEMO_APP_URL:?Set DEMO_APP_URL in .env.demo}
+  DATABASE_URL: postgres://${DEMO_POSTGRES_USER:-fulltext-rss-reader-demo}:${DEMO_POSTGRES_PASSWORD:?Set DEMO_POSTGRES_PASSWORD in .env.demo}@postgres-demo:5432/${DEMO_POSTGRES_DB:-fulltext-rss-reader-demo}
+  SINGLE_USER_USERNAME: ${DEMO_USERNAME:-demo-user}
+  SINGLE_USER_PASSWORD_HASH: ${DEMO_PASSWORD_HASH:?Set DEMO_PASSWORD_HASH in .env.demo}
+  SESSION_SECRET: ${DEMO_SESSION_SECRET:?Set DEMO_SESSION_SECRET in .env.demo}
+  FEED_REFRESH_MINUTES: ${DEMO_FEED_REFRESH_MINUTES:-60}
+  REFRESH_BATCH_SIZE: ${DEMO_REFRESH_BATCH_SIZE:-2}
+  FULL_TEXT_PREFETCH_COUNT: ${DEMO_FULL_TEXT_PREFETCH_COUNT:-1}
+  DEMO_MODE: "true"
+  DEMO_MAX_FEEDS: ${DEMO_MAX_FEEDS:-5}
+  DEMO_MAX_THEMES: ${DEMO_MAX_THEMES:-3}
+  DEMO_MAX_ARTICLES_PER_FEED: ${DEMO_MAX_ARTICLES_PER_FEED:-50}
+  DEMO_FEED_CREATE_COOLDOWN_MINUTES: ${DEMO_FEED_CREATE_COOLDOWN_MINUTES:-1}
+  DEMO_REFRESH_COOLDOWN_MINUTES: ${DEMO_REFRESH_COOLDOWN_MINUTES:-10}
+
+x-app-image: &app-image
+  image: fulltext-rss-reader-demo:${DEMO_IMAGE_TAG:-local}
+  build:
+    context: .
+    dockerfile: Dockerfile
+
+services:
+  postgres-demo:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${DEMO_POSTGRES_DB:-fulltext-rss-reader-demo}
+      POSTGRES_USER: ${DEMO_POSTGRES_USER:-fulltext-rss-reader-demo}
+      POSTGRES_PASSWORD: ${DEMO_POSTGRES_PASSWORD:?Set DEMO_POSTGRES_PASSWORD in .env.demo}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    volumes:
+      - demo-postgres-data:/var/lib/postgresql/data
+    networks:
+      - demo
+
+  migrate-demo:
+    <<: *app-image
+    command: ["node", "--conditions=react-server", "dist/db/migrate.mjs"]
+    environment: *app-environment
+    depends_on:
+      postgres-demo:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - demo
+
+  seed-demo:
+    image: postgres:17-alpine
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        psql "$$DATABASE_URL"
+        --set=ON_ERROR_STOP=1
+        --set=demo_username="$$SINGLE_USER_USERNAME"
+        --file=/demo/demo-seed.sql
+    environment:
+      DATABASE_URL: postgres://${DEMO_POSTGRES_USER:-fulltext-rss-reader-demo}:${DEMO_POSTGRES_PASSWORD:?Set DEMO_POSTGRES_PASSWORD in .env.demo}@postgres-demo:5432/${DEMO_POSTGRES_DB:-fulltext-rss-reader-demo}
+      SINGLE_USER_USERNAME: ${DEMO_USERNAME:-demo-user}
+    depends_on:
+      migrate-demo:
+        condition: service_completed_successfully
+    restart: "no"
+    volumes:
+      - ./scripts/demo-seed.sql:/demo/demo-seed.sql:ro
+    networks:
+      - demo
+
+  web-demo:
+    <<: *app-image
+    command: ["node", "server.js"]
+    environment: *app-environment
+    depends_on:
+      seed-demo:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${DEMO_APP_PORT:-18121}:3000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - demo
+
+volumes:
+  demo-postgres-data:
+
+networks:
+  demo:
+    driver: bridge

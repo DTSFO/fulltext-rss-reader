@@ -24,6 +24,7 @@ demo-dist/
 .env
 .env.*
 !.env.example
+!.env.demo.example
 
 # Logs
 *.log

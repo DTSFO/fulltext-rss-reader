@@ -4,11 +4,13 @@ import { redirect } from "next/navigation";
 
 import { LoginForm } from "@/features/auth/components/login-form";
 import { getSessionUser } from "@/features/auth/server/session";
+import { getEnv } from "@/lib/config/env";
 
 export const metadata: Metadata = { title: "登录" };
 
 export default async function LoginPage() {
   const user = await getSessionUser();
+  const env = getEnv();
 
   if (user) {
     redirect("/reader");
@@ -41,7 +43,9 @@ export default async function LoginPage() {
           </p>
         </div>
 
-        <p className="text-sm text-subtle">单用户私有阅读空间 · demo.example.com</p>
+        <p className="text-sm text-subtle">
+          {env.DEMO_MODE ? "可重置的公开功能演示" : "单用户私有阅读空间"}
+        </p>
       </section>
 
       <section className="relative flex min-h-[calc(100dvh-4rem)] items-center justify-center lg:min-h-dvh">
@@ -54,7 +58,12 @@ export default async function LoginPage() {
           </p>
           <h2 className="mt-3 font-serif text-4xl font-semibold">欢迎回来</h2>
           <p className="mt-3 leading-7 text-muted">登录后继续浏览订阅、全文与收藏。</p>
-          <LoginForm defaultUsername="demo-user" />
+          {env.DEMO_MODE ? (
+            <p className="mt-5 rounded-[var(--radius-sm)] border border-border bg-surface-raised px-4 py-3 text-sm leading-6 text-muted">
+              公开演示账号：<code>{env.SINGLE_USER_USERNAME}</code> / <code>demo-reader</code>
+            </p>
+          ) : null}
+          <LoginForm defaultUsername={env.SINGLE_USER_USERNAME} />
         </div>
       </section>
     </main>

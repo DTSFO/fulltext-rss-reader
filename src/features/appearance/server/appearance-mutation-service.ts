@@ -59,6 +59,7 @@ import {
   getAppearanceTheme,
   getFormalTheme,
 } from "@/features/appearance/server/appearance-query-service";
+import { assertDemoCapacity } from "@/lib/config/demo-policy";
 import { AppError } from "@/lib/errors/app-error";
 import { logger } from "@/lib/logging/logger";
 
@@ -255,6 +256,8 @@ export async function createAppearanceTheme(accountId: string, rawInput: unknown
       }
       await assertRootAvailable(tx, accountId, revision);
       await assertSourceStillCurrent(tx, accountId, input.source);
+      const themeCount = await tx.$count(appearanceThemes, eq(appearanceThemes.accountId, accountId));
+      assertDemoCapacity("themes", themeCount);
       themeId = crypto.randomUUID();
       await tx.insert(appearanceThemes).values({
         id: themeId,

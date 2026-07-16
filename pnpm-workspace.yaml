@@ -1,6 +1,9 @@
 packages:
   - "."
 
+overrides:
+  postcss: 8.5.19
+
 allowBuilds:
   "@node-rs/argon2": true
   esbuild: true

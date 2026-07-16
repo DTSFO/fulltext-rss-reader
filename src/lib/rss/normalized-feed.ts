@@ -26,6 +26,10 @@ export const normalizedFeedSchema = z.object({
 export type NormalizedFeed = z.infer<typeof normalizedFeedSchema>;
 export type NormalizedFeedItem = z.infer<typeof normalizedFeedItemSchema>;
 
+type ParseFeedOptions = {
+  maxItems?: number;
+};
+
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "",
@@ -44,7 +48,7 @@ const feedHtmlOptions: sanitizeHtml.IOptions = {
   allowedSchemes: ["http", "https", "mailto"],
 };
 
-export function parseFeedXml(xml: string, sourceUrl: string): NormalizedFeed {
+export function parseFeedXml(xml: string, sourceUrl: string, options: ParseFeedOptions = {}): NormalizedFeed {
   let document: unknown;
 
   try {
@@ -60,17 +64,17 @@ export function parseFeedXml(xml: string, sourceUrl: string): NormalizedFeed {
   const record = document as Record<string, unknown>;
 
   if (isRecord(record.rss)) {
-    return parseRss(record.rss, sourceUrl);
+    return parseRss(record.rss, sourceUrl, options);
   }
 
   if (isRecord(record.feed)) {
-    return parseAtom(record.feed, sourceUrl);
+    return parseAtom(record.feed, sourceUrl, options);
   }
 
   throw feedParseError();
 }
 
-function parseRss(rss: Record<string, unknown>, sourceUrl: string): NormalizedFeed {
+function parseRss(rss: Record<string, unknown>, sourceUrl: string, options: ParseFeedOptions): NormalizedFeed {
   const channel = isRecord(rss.channel) ? rss.channel : undefined;
 
   if (!channel) {
@@ -78,8 +82,11 @@ function parseRss(rss: Record<string, unknown>, sourceUrl: string): NormalizedFe
   }
 
   const siteUrl = resolveOptionalUrl(readText(channel.link), sourceUrl);
-  const items = toArray(channel.item)
-    .filter(isRecord)
+  const items = selectNewestRecords(
+    channel.item,
+    options.maxItems,
+    (item) => parseDate(readText(item.pubDate) ?? readText(item.date)),
+  )
     .map((item) => normalizeItem({
       externalId: readText(item.guid),
       url: resolveRequiredUrl(readText(item.link), sourceUrl),
@@ -98,10 +105,13 @@ function parseRss(rss: Record<string, unknown>, sourceUrl: string): NormalizedFe
   });
 }
 
-function parseAtom(feed: Record<string, unknown>, sourceUrl: string): NormalizedFeed {
+function parseAtom(feed: Record<string, unknown>, sourceUrl: string, options: ParseFeedOptions): NormalizedFeed {
   const siteUrl = findAtomLink(feed.link, sourceUrl, "alternate");
-  const items = toArray(feed.entry)
-    .filter(isRecord)
+  const items = selectNewestRecords(
+    feed.entry,
+    options.maxItems,
+    (entry) => parseDate(readText(entry.published) ?? readText(entry.updated)),
+  )
     .map((entry) => {
       const url = findAtomLink(entry.link, sourceUrl, "alternate");
       const content = readText(entry.content) ?? readText(entry.summary);
@@ -216,6 +226,22 @@ function parseDate(value: string | undefined) {
 
   const date = new Date(value);
   return Number.isNaN(date.valueOf()) ? null : date;
+}
+
+function selectNewestRecords(
+  value: unknown,
+  maxItems: number | undefined,
+  readPublishedAt: (record: Record<string, unknown>) => Date | null,
+): Record<string, unknown>[] {
+  const records = toArray(value).filter(isRecord);
+  if (maxItems === undefined || records.length <= maxItems) return records;
+  if (maxItems <= 0) return [];
+
+  return records
+    .map((record, index) => ({ record, index, publishedAt: readPublishedAt(record)?.getTime() ?? Number.NEGATIVE_INFINITY }))
+    .sort((left, right) => right.publishedAt - left.publishedAt || left.index - right.index)
+    .slice(0, maxItems)
+    .map(({ record }) => record);
 }
 
 function toArray(value: unknown): unknown[] {

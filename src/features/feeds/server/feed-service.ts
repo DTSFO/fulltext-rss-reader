@@ -2,7 +2,14 @@ import "server-only";
 
 import { and, asc, eq, sql } from "drizzle-orm";
 
-import { articles, categories, feedCategories, feeds } from "@/db/schema";
+import { articles, categories, feedCategories, feeds, users } from "@/db/schema";
+import {
+  assertDemoCapacity,
+  assertDemoFeedCreateAvailable,
+  assertDemoRefreshAvailable,
+  demoRefreshReservation,
+  getDemoArticleRetentionLimit,
+} from "@/lib/config/demo-policy";
 import { getEnv } from "@/lib/config/env";
 import { getDb } from "@/lib/db/client";
 import { AppError } from "@/lib/errors/app-error";
@@ -11,6 +18,9 @@ import { logger } from "@/lib/logging/logger";
 import { parseFeedXml, type NormalizedFeed } from "@/lib/rss/normalized-feed";
 
 const FEED_CONTENT_TYPES = ["application/rss+xml", "application/atom+xml", "application/xml", "text/xml", "text/plain"] as const;
+const ARTICLE_UPSERT_BATCH_SIZE = 250;
+type Transaction = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+type RefreshSource = "manual" | "scheduled";
 
 export async function listFeeds(userId: string) {
   const [feedRows, categoryRows] = await Promise.all([
@@ -45,15 +55,17 @@ export async function listFeeds(userId: string) {
 }
 
 export async function createFeed(userId: string, inputUrl: string, categoryName?: string) {
+  const db = getDb();
   const requestedUrl = normalizeHttpUrl(inputUrl).toString();
+  await reserveDemoFeedCreation(db, userId);
   const fetched = await fetchAndParseFeed(requestedUrl);
   const canonicalUrl = normalizeHttpUrl(fetched.finalUrl).toString();
   const now = new Date();
   const nextRefreshAt = addMinutes(now, getEnv().FEED_REFRESH_MINUTES);
-  const db = getDb();
 
   try {
     return await db.transaction(async (tx) => {
+      await assertFeedCapacity(tx, userId, true);
       const [feed] = await tx
         .insert(feeds)
         .values({
@@ -64,6 +76,7 @@ export async function createFeed(userId: string, inputUrl: string, categoryName?
           description: fetched.feed.description,
           lastFetchedAt: now,
           nextRefreshAt,
+          refreshLeaseUntil: demoRefreshReservation(now),
         })
         .onConflictDoNothing({ target: [feeds.userId, feeds.canonicalUrl] })
         .returning();
@@ -123,21 +136,9 @@ export async function createFeed(userId: string, inputUrl: string, categoryName?
   }
 }
 
-export async function refreshFeed(userId: string, feedId: string) {
+export async function refreshFeed(userId: string, feedId: string, source: RefreshSource = "manual") {
   const db = getDb();
-  const [feed] = await db
-    .select()
-    .from(feeds)
-    .where(and(eq(feeds.id, feedId), eq(feeds.userId, userId)))
-    .limit(1);
-
-  if (!feed) {
-    throw new AppError({
-      code: "FEED_NOT_FOUND",
-      message: "没有找到该订阅。",
-      status: 404,
-    });
-  }
+  const feed = await loadFeedForRefresh(userId, feedId, source);
 
   const startedAt = Date.now();
 
@@ -157,7 +158,7 @@ export async function refreshFeed(userId: string, feedId: string) {
           refreshFailures: 0,
           lastErrorCode: null,
           lastErrorMessage: null,
-          refreshLeaseUntil: null,
+          refreshLeaseUntil: demoRefreshReservation(now),
           updatedAt: now,
         })
         .where(eq(feeds.id, feed.id));
@@ -187,7 +188,7 @@ export async function refreshFeed(userId: string, feedId: string) {
         lastErrorCode: safeCode,
         lastErrorMessage: safeMessage,
         nextRefreshAt: addMinutes(new Date(), retryMinutes),
-        refreshLeaseUntil: null,
+        refreshLeaseUntil: demoRefreshReservation(new Date()),
         updatedAt: new Date(),
       })
       .where(eq(feeds.id, feed.id));
@@ -210,45 +211,128 @@ async function fetchAndParseFeed(url: string) {
     maxBytes: 5 * 1024 * 1024,
   });
 
-  return { finalUrl: response.finalUrl, feed: parseFeedXml(response.body, response.finalUrl) };
+  const maxItems = getDemoArticleRetentionLimit() ?? undefined;
+  return { finalUrl: response.finalUrl, feed: parseFeedXml(response.body, response.finalUrl, { maxItems }) };
 }
 
-type Transaction = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
-
 async function upsertFeedArticles(tx: Transaction, feedId: string, feed: NormalizedFeed) {
-  if (feed.items.length === 0) {
-    return;
+  if (feed.items.length > 0) {
+    const now = new Date();
+
+    for (let offset = 0; offset < feed.items.length; offset += ARTICLE_UPSERT_BATCH_SIZE) {
+      const batch = feed.items.slice(offset, offset + ARTICLE_UPSERT_BATCH_SIZE);
+      await tx
+        .insert(articles)
+        .values(
+          batch.map((item) => ({
+            feedId,
+            externalId: item.externalId,
+            url: item.url,
+            title: item.title,
+            author: item.author,
+            summary: item.summary,
+            feedContentHtml: item.contentHtml,
+            publishedAt: item.publishedAt,
+            updatedAt: now,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [articles.feedId, articles.externalId],
+          set: {
+            url: sql`excluded.url`,
+            title: sql`excluded.title`,
+            author: sql`excluded.author`,
+            summary: sql`excluded.summary`,
+            feedContentHtml: sql`excluded.feed_content_html`,
+            publishedAt: sql`excluded.published_at`,
+            updatedAt: now,
+          },
+        });
+    }
   }
 
-  const now = new Date();
-
-  await tx
-    .insert(articles)
-    .values(
-      feed.items.map((item) => ({
-        feedId,
-        externalId: item.externalId,
-        url: item.url,
-        title: item.title,
-        author: item.author,
-        summary: item.summary,
-        feedContentHtml: item.contentHtml,
-        publishedAt: item.publishedAt,
-        updatedAt: now,
-      })),
+  const retentionLimit = getDemoArticleRetentionLimit();
+  if (retentionLimit === null) return;
+  await tx.execute(sql`
+    delete from ${articles}
+    where ${articles.id} in (
+      select ${articles.id}
+      from ${articles}
+      where ${articles.feedId} = ${feedId}
+      order by coalesce(${articles.publishedAt}, ${articles.createdAt}) desc, ${articles.id} desc
+      offset ${retentionLimit}
     )
-    .onConflictDoUpdate({
-      target: [articles.feedId, articles.externalId],
-      set: {
-        url: sql`excluded.url`,
-        title: sql`excluded.title`,
-        author: sql`excluded.author`,
-        summary: sql`excluded.summary`,
-        feedContentHtml: sql`excluded.feed_content_html`,
-        publishedAt: sql`excluded.published_at`,
-        updatedAt: now,
-      },
+  `);
+}
+
+async function assertFeedCapacity(
+  db: Pick<ReturnType<typeof getDb>, "$count" | "execute">,
+  userId: string,
+  lockQuota: boolean,
+): Promise<void> {
+  if (!getEnv().DEMO_MODE) return;
+  if (lockQuota) {
+    await db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`demo-feed-quota:${userId}`}, 0))`);
+  }
+  const feedCount = await db.$count(feeds, eq(feeds.userId, userId));
+  assertDemoCapacity("feeds", feedCount);
+}
+
+async function reserveDemoFeedCreation(db: ReturnType<typeof getDb>, userId: string): Promise<void> {
+  if (!getEnv().DEMO_MODE) return;
+  await db.transaction(async (tx) => {
+    await assertFeedCapacity(tx, userId, true);
+    const [account] = await tx
+      .select({ lastFeedCreateAttemptAt: users.updatedAt })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1)
+      .for("update");
+    if (!account) throw new Error("Demo account could not be found.");
+
+    const now = new Date();
+    assertDemoFeedCreateAvailable(account.lastFeedCreateAttemptAt, now);
+    await tx.update(users).set({ updatedAt: now }).where(eq(users.id, userId));
+  });
+}
+
+async function loadFeedForRefresh(userId: string, feedId: string, source: RefreshSource) {
+  const db = getDb();
+  if (source === "manual" && getEnv().DEMO_MODE) {
+    return db.transaction(async (tx) => {
+      const [feed] = await tx
+        .select()
+        .from(feeds)
+        .where(and(eq(feeds.id, feedId), eq(feeds.userId, userId)))
+        .limit(1)
+        .for("update");
+      assertFeedFound(feed);
+      const now = new Date();
+      assertDemoRefreshAvailable(feed.refreshLeaseUntil, now);
+      await tx
+        .update(feeds)
+        .set({ refreshLeaseUntil: demoRefreshReservation(now), updatedAt: now })
+        .where(eq(feeds.id, feed.id));
+      return feed;
     });
+  }
+
+  const [feed] = await db
+    .select()
+    .from(feeds)
+    .where(and(eq(feeds.id, feedId), eq(feeds.userId, userId)))
+    .limit(1);
+  assertFeedFound(feed);
+  return feed;
+}
+
+function assertFeedFound<T>(feed: T | undefined): asserts feed is T {
+  if (feed) return;
+  throw new AppError({
+    code: "FEED_NOT_FOUND",
+    message: "没有找到该订阅。",
+    status: 404,
+  });
 }
 
 function addMinutes(date: Date, minutes: number) {

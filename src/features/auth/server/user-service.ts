@@ -13,10 +13,7 @@ export async function ensureConfiguredUser() {
   const [user] = await db
     .insert(users)
     .values({ username: SINGLE_USER_USERNAME })
-    .onConflictDoUpdate({
-      target: users.username,
-      set: { updatedAt: new Date() },
-    })
+    .onConflictDoNothing({ target: users.username })
     .returning({ id: users.id, username: users.username });
 
   if (user) {

@@ -57,6 +57,7 @@ import {
   projectedThemeImportRequestBytes,
 } from "@/features/appearance/server/portable-size";
 import { APPEARANCE_TECHNICAL_LIMITS } from "@/features/appearance/server/technical-limits";
+import { assertDemoCapacity, assertDemoReplacementCount } from "@/lib/config/demo-policy";
 import { getDb } from "@/lib/db/client";
 import { AppError } from "@/lib/errors/app-error";
 import { logger } from "@/lib/logging/logger";
@@ -244,6 +245,8 @@ export async function importAppearanceTheme(accountId: string, rawInput: unknown
         return;
       }
       await assertRootAvailable(tx, accountId, revision);
+      const themeCount = await tx.$count(appearanceThemes, eq(appearanceThemes.accountId, accountId));
+      assertDemoCapacity("themes", themeCount);
       const name = await uniqueImportedName(tx, accountId, imported.name);
       themeId = crypto.randomUUID();
       await tx.insert(appearanceThemes).values({
@@ -608,6 +611,7 @@ export async function previewAppearanceRestore(accountId: string, rawInput: unkn
     };
   }
 
+  assertDemoReplacementCount("themes", input.file.themes.length);
   validatePackageReferences(input.file);
   const canonicalThemes = input.file.themes.map((theme) => ({
     portableId: theme.portableId,
@@ -816,6 +820,7 @@ export async function confirmAppearanceRestore(
           await releaseRootForReconfirmation("恢复计划内容校验失败，请重新上传并预览。");
           return;
         }
+    assertDemoReplacementCount("themes", file.themes.length);
 
     const idMap = new Map(file.themes.map((theme) => [theme.portableId, crypto.randomUUID()]));
     await tx

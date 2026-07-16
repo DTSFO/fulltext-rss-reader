@@ -1,4 +1,6 @@
 import { lookup } from "node:dns/promises";
+import { request as httpRequest, type IncomingHttpHeaders, type IncomingMessage, type RequestOptions } from "node:http";
+import { request as httpsRequest, type RequestOptions as HttpsRequestOptions } from "node:https";
 import { isIP } from "node:net";
 
 import ipaddr from "ipaddr.js";
@@ -20,6 +22,23 @@ export type SafeTextResponse = {
   body: string;
   contentType: string;
   finalUrl: string;
+  status: number;
+};
+
+type PublicAddress = {
+  address: string;
+  family: 4 | 6;
+};
+
+type ResolvedHttpTarget = {
+  addresses: PublicAddress[];
+  url: URL;
+};
+
+type PinnedResponse = {
+  body: string;
+  contentType: string;
+  headers: IncomingHttpHeaders;
   status: number;
 };
 
@@ -82,15 +101,23 @@ export function isPublicIpAddress(value: string) {
 }
 
 export async function assertPublicHttpUrl(value: string | URL) {
+  return (await resolvePublicHttpTarget(value)).url;
+}
+
+async function resolvePublicHttpTarget(value: string | URL): Promise<ResolvedHttpTarget> {
   const url = normalizeHttpUrl(value.toString());
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  const literalFamily = isIP(hostname);
 
-  if (isIP(hostname)) {
+  if (literalFamily) {
     if (!isPublicIpAddress(hostname)) {
       throw privateAddressError();
     }
 
-    return url;
+    return {
+      addresses: [{ address: hostname, family: literalFamily as 4 | 6 }],
+      url,
+    };
   }
 
   let addresses: Array<{ address: string; family: number }>;
@@ -110,7 +137,13 @@ export async function assertPublicHttpUrl(value: string | URL) {
     throw privateAddressError();
   }
 
-  return url;
+  return {
+    addresses: addresses.map(({ address, family }) => ({
+      address,
+      family: family === 6 ? 6 : 4,
+    })),
+    url,
+  };
 }
 
 export async function safeFetchText(input: string | URL, options: SafeFetchOptions = {}): Promise<SafeTextResponse> {
@@ -119,21 +152,22 @@ export async function safeFetchText(input: string | URL, options: SafeFetchOptio
   const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
   const acceptedTypes = options.accept ?? ["application/rss+xml", "application/atom+xml", "application/xml", "text/xml", "text/html", "text/plain"];
 
-  let currentUrl = await assertPublicHttpUrl(input);
+  let currentTarget = await resolvePublicHttpTarget(input);
 
   for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
-    let response: Response;
+    let response: PinnedResponse;
 
     try {
-      response = await fetch(currentUrl, {
-        redirect: "manual",
-        signal: AbortSignal.timeout(timeoutMs),
-        headers: {
-          accept: acceptedTypes.join(", "),
-          "user-agent": "Example Author-RSS/0.1 (+https://demo.example.com)",
-        },
+      response = await requestPinnedText(currentTarget, {
+        acceptedTypes,
+        maxBytes,
+        timeoutMs,
       });
     } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+
       throw new AppError({
         code: "FEED_FETCH_FAILED",
         message:
@@ -146,7 +180,7 @@ export async function safeFetchText(input: string | URL, options: SafeFetchOptio
     }
 
     if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get("location");
+      const location = firstHeaderValue(response.headers.location);
 
       if (!location) {
         throw new AppError({
@@ -164,11 +198,11 @@ export async function safeFetchText(input: string | URL, options: SafeFetchOptio
         });
       }
 
-      currentUrl = await assertPublicHttpUrl(new URL(location, currentUrl));
+      currentTarget = await resolvePublicHttpTarget(new URL(location, currentTarget.url));
       continue;
     }
 
-    if (!response.ok) {
+    if (response.status < 200 || response.status >= 300) {
       throw new AppError({
         code: "FEED_FETCH_FAILED",
         message: `订阅源返回 HTTP ${response.status}。`,
@@ -176,45 +210,10 @@ export async function safeFetchText(input: string | URL, options: SafeFetchOptio
       });
     }
 
-    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-    const isAccepted = acceptedTypes.some((type) => contentType === type || contentType.endsWith("+xml"));
-
-    if (contentType && !isAccepted) {
-      throw new AppError({
-        code: "FEED_FETCH_FAILED",
-        message: "订阅地址返回了不支持的内容类型。",
-        status: 422,
-        details: { contentType },
-      });
-    }
-
-    const declaredLength = Number(response.headers.get("content-length") ?? 0);
-
-    if (declaredLength > maxBytes) {
-      throw responseTooLargeError();
-    }
-
-    let body: string;
-
-    try {
-      body = await readBoundedText(response, maxBytes);
-    } catch (error) {
-      if (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError")) {
-        throw new AppError({
-          code: "FEED_FETCH_FAILED",
-          message: "订阅源响应超时。",
-          status: 422,
-          cause: error,
-        });
-      }
-
-      throw error;
-    }
-
     return {
-      body,
-      contentType,
-      finalUrl: currentUrl.toString(),
+      body: response.body,
+      contentType: response.contentType,
+      finalUrl: currentTarget.url.toString(),
       status: response.status,
     };
   }
@@ -226,41 +225,134 @@ export async function safeFetchText(input: string | URL, options: SafeFetchOptio
   });
 }
 
-async function readBoundedText(response: Response, maxBytes: number) {
-  if (!response.body) {
-    return "";
+async function requestPinnedText(
+  target: ResolvedHttpTarget,
+  {
+    acceptedTypes,
+    maxBytes,
+    timeoutMs,
+  }: {
+    acceptedTypes: readonly string[];
+    maxBytes: number;
+    timeoutMs: number;
+  },
+): Promise<PinnedResponse> {
+  // Use the already-validated address as the socket destination. Keeping the
+  // original hostname in Host/servername preserves virtual hosting and TLS
+  // certificate verification without allowing a second DNS lookup to rebind.
+  const address = target.addresses[0];
+  const hostname = target.url.hostname.replace(/^\[|\]$/g, "");
+  const requestOptions: RequestOptions | HttpsRequestOptions = {
+    agent: false,
+    family: address.family,
+    headers: {
+      accept: acceptedTypes.join(", "),
+      "accept-encoding": "identity",
+      host: target.url.host,
+      "user-agent": "Example Author-RSS/0.1 (+https://demo.example.com)",
+    },
+    hostname: address.address,
+    method: "GET",
+    path: `${target.url.pathname}${target.url.search}`,
+    port: target.url.port ? Number(target.url.port) : undefined,
+  };
+
+  if (target.url.protocol === "https:" && !isIP(hostname)) {
+    (requestOptions as HttpsRequestOptions).servername = hostname;
   }
 
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
+  const request = target.url.protocol === "https:" ? httpsRequest : httpRequest;
 
-  while (true) {
-    const { done, value } = await reader.read();
+  return new Promise<PinnedResponse>((resolve, reject) => {
+    let response: IncomingMessage | undefined;
+    let settled = false;
 
-    if (done) {
-      break;
-    }
+    const finish = (result: PinnedResponse) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
 
-    totalBytes += value.byteLength;
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      response?.destroy();
+      reject(error);
+    };
 
-    if (totalBytes > maxBytes) {
-      await reader.cancel();
-      throw responseTooLargeError();
-    }
+    const clientRequest = request(requestOptions, (incoming) => {
+      response = incoming;
+      const status = incoming.statusCode ?? 0;
+      const contentType = firstHeaderValue(incoming.headers["content-type"])?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
 
-    chunks.push(value);
-  }
+      if ((status >= 300 && status < 400) || status < 200 || status >= 300) {
+        incoming.destroy();
+        finish({ body: "", contentType, headers: incoming.headers, status });
+        return;
+      }
 
-  const body = new Uint8Array(totalBytes);
-  let offset = 0;
+      const isAccepted = acceptedTypes.some((type) => contentType === type || contentType.endsWith("+xml"));
 
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+      if (contentType && !isAccepted) {
+        fail(
+          new AppError({
+            code: "FEED_FETCH_FAILED",
+            message: "订阅地址返回了不支持的内容类型。",
+            status: 422,
+            details: { contentType },
+          }),
+        );
+        return;
+      }
 
-  return new TextDecoder().decode(body);
+      const declaredLength = Number(firstHeaderValue(incoming.headers["content-length"]) ?? 0);
+
+      if (declaredLength > maxBytes) {
+        fail(responseTooLargeError());
+        return;
+      }
+
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+
+      incoming.on("data", (chunk: Buffer) => {
+        totalBytes += chunk.byteLength;
+
+        if (totalBytes > maxBytes) {
+          fail(responseTooLargeError());
+          return;
+        }
+
+        chunks.push(chunk);
+      });
+      incoming.once("end", () => {
+        finish({
+          body: Buffer.concat(chunks, totalBytes).toString("utf8"),
+          contentType,
+          headers: incoming.headers,
+          status,
+        });
+      });
+      incoming.once("error", fail);
+      incoming.once("aborted", () => fail(new Error("Response aborted")));
+    });
+
+    const timer = setTimeout(() => {
+      const error = new DOMException("Request timed out", "TimeoutError");
+      response?.destroy(error);
+      clientRequest.destroy(error);
+      fail(error);
+    }, timeoutMs);
+
+    clientRequest.once("error", fail);
+    clientRequest.end();
+  });
+}
+
+function firstHeaderValue(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
 }
 
 function privateAddressError() {

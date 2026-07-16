@@ -7,6 +7,7 @@
     "dev": "next dev",
     "demo:dev": "vite --config vite.demo.config.ts",
     "demo:build": "vite build --config vite.demo.config.ts",
+    "demo:config": "docker compose --env-file .env.demo.example -f docker-compose.demo.yml config --quiet",
     "build": "pnpm build:web && pnpm build:worker && pnpm build:migrate",
     "build:web": "next build",
     "build:worker": "tsup src/jobs/refresh-worker.ts --format esm --platform node --out-dir dist/jobs --clean --no-splitting",

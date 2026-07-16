@@ -8,7 +8,9 @@ const patterns = {
   "private-key": /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
   "api-token": /(?:sk-|gh[pousr]_)[A-Za-z0-9_-]{20,}/,
   "private-home": /\/home\/[A-Za-z0-9._-]+\//,
-  "private-domain": /713007\.xyz/i,
+  // rss-demo is an intentionally published, disposable endpoint. Keep every
+  // other hostname under the infrastructure domain blocked.
+  "private-domain": /(?<!rss-demo\.)713007\.xyz/i,
   "personal-email": /\b\d{5,}@(qq|foxmail)\.com\b/i,
   "authorization-header": /authorization\s*[:=]\s*["'](?:bearer\s+)?[A-Za-z0-9._-]{20,}["']/i,
   "remote-database-credential": /postgres(?:ql)?:\/\/(?!\$\{)[^:\s]+:(?!\$\{)[^@\s]+@(?!localhost|127\.0\.0\.1)/i,

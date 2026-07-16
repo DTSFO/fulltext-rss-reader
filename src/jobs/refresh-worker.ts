@@ -46,7 +46,7 @@ async function main() {
 }
 
 async function processFeed(feed: { id: string; userId: string }) {
-  await refreshFeed(feed.userId, feed.id);
+  await refreshFeed(feed.userId, feed.id, "scheduled");
   await prefetchNewestArticles(feed.userId, feed.id, getEnv().FULL_TEXT_PREFETCH_COUNT);
 }
 
