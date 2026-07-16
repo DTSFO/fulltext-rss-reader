@@ -2,10 +2,11 @@ import type { Metadata } from "next";
 
 import { ReaderWorkspace } from "@/features/reader/components/reader-workspace";
 import { getThemedPageAppearance } from "@/features/appearance/server/appearance-page";
+import { getEnv } from "@/lib/config/env";
 
 export const metadata: Metadata = { title: "阅读器" };
 
 export default async function ReaderPage() {
   const { user } = await getThemedPageAppearance();
-  return <ReaderWorkspace username={user.username} />;
+  return <ReaderWorkspace username={user.username} demoMode={getEnv().DEMO_MODE} />;
 }

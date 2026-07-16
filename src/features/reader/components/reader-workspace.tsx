@@ -42,7 +42,7 @@ import { cn } from "@/lib/styling/cn";
 
 type ReaderFilter = "all" | "unread" | "starred";
 
-export function ReaderWorkspace({ username }: { username: string }) {
+export function ReaderWorkspace({ username, demoMode = false }: { username: string; demoMode?: boolean }) {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<ReaderFilter>("all");
   const [feedId, setFeedId] = useState<string | null>(null);
@@ -452,6 +452,7 @@ export function ReaderWorkspace({ username }: { username: string }) {
       {isAddFeedOpen ? (
         <AddFeedDialog
           categories={categoriesQuery.data?.categories ?? []}
+          demoMode={demoMode}
           onClose={() => setIsAddFeedOpen(false)}
           onCreated={async () => {
             await Promise.all([
@@ -561,10 +562,12 @@ function ArticleReader({
 
 function AddFeedDialog({
   categories,
+  demoMode,
   onClose,
   onCreated,
 }: {
   categories: CategoryListItem[];
+  demoMode: boolean;
   onClose: () => void;
   onCreated: () => Promise<void>;
 }) {
@@ -613,7 +616,11 @@ function AddFeedDialog({
           </button>
         </div>
 
-        <p className="mt-4 text-sm leading-6 text-muted">输入 RSS 或 Atom 地址。添加后会立即抓取，之后每 30 分钟自动刷新。</p>
+        <p className="mt-4 text-sm leading-6 text-muted">
+          {demoMode
+            ? "输入 RSS 或 Atom 地址。添加后会立即抓取；共享演示不运行后台刷新，可在订阅中手动刷新（10 分钟冷却）。"
+            : "输入 RSS 或 Atom 地址。添加后会立即抓取，之后每 30 分钟自动刷新。"}
+        </p>
         <label className="mt-6 block space-y-2">
           <span className="text-sm font-medium">订阅地址</span>
           <input
