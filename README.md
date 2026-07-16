@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md)
 
-A single-user RSS/Atom reader with full-text extraction, a background refresh worker, guarded remote fetching, and versioned appearance settings.
+A deployable single-user RSS/Atom reader with full-text extraction, guarded remote fetching, and versioned appearance settings. The normal Docker Compose profile includes an independent refresh worker; the public hosted demo deliberately runs a reduced, quota-limited profile without that worker.
 
 [Live demo](https://rss-demo.713007.xyz/) | [Architecture](docs/architecture.md) | [Security](SECURITY.md)
 
@@ -21,15 +21,24 @@ The screenshots below are captured from the public, resettable hosted demo. They
 - Next.js 16 and React 19 reader with responsive desktop and mobile workflows
 - PostgreSQL persistence through Drizzle ORM
 - RSS/Atom normalization and Readability-based full-text extraction
-- Independent refresh worker with bounded batches and recoverable error state
+- Independent refresh worker with bounded batches and recoverable error state in the normal deployment profile
 - Single-user Argon2 authentication and signed sessions
 - URL, redirect, address-range, content-type, and response-size safeguards
 - Theme editing, preview, import/export, leases, and recovery
 - Vitest, Testing Library, Playwright, and integration test coverage
 
+## Deployment profiles
+
+| Profile | Runtime | Intended use |
+| --- | --- | --- |
+| Normal self-hosted stack | `web`, `worker`, `migrate`, PostgreSQL | A private single-user reader with scheduled background refresh |
+| Hosted-demo stack | `web-demo`, `migrate-demo`, `seed-demo`, isolated PostgreSQL; no worker | A shared, disposable feature demo with manual refresh, quotas, cooldowns, and deterministic reset data |
+
+These are repository-supported deployment profiles, not claims that every running instance uses the same topology. Reverse proxy, tunnel, DNS, monitoring, and reset scheduling remain operator-managed infrastructure.
+
 ## Hosted demo
 
-The hosted demo runs the authenticated application with a disposable PostgreSQL database. Sign in with `demo-user` / `demo-reader` to add RSS subscriptions and try theme editing, preview, import, and export. To keep the shared instance bounded, it allows five feeds, three custom themes, fifty retained articles per feed, one new subscription attempt per shared account each minute, and one manual refresh per feed every ten minutes. Invented seed data is restored every six hours.
+The current public instance runs the authenticated hosted-demo profile with a disposable PostgreSQL database and no background refresh worker. Sign in with `demo-user` / `demo-reader` to add RSS subscriptions and try theme editing, preview, import, and export. To keep the shared instance bounded, it allows five feeds, three custom themes, fifty retained articles per feed, one new subscription attempt per shared account each minute, and one manual refresh per feed every ten minutes. The deployed instance is scheduled to restore invented seed data every six hours; scheduling is external to the application stack.
 
 This is a shared public account. Do not add private, authenticated, or credential-bearing feed URLs. The demo is for feature evaluation only; it is not connected to a production database or control plane.
 
@@ -48,7 +57,7 @@ pnpm dev
 
 Replace the deliberately invalid hash in `.env` with the generated Argon2 value before starting the application.
 
-For an isolated authenticated demo on a VPS, use docker-compose.demo.yml and the deterministic reset/seed workflow documented in [Hosted demo](docs/hosted-demo.md). This stack binds only to a loopback port, uses a separate PostgreSQL volume, and does not start the background refresh worker.
+For an isolated authenticated demo on a Linux host, use `docker-compose.demo.yml` and the deterministic reset/seed workflow documented in [Hosted demo](docs/hosted-demo.md). This stack binds only to a loopback port, uses a separate PostgreSQL volume, and does not start the background refresh worker. Publishing it over HTTPS and scheduling resets are separate operator tasks.
 
 ## Verification
 
@@ -80,9 +89,9 @@ pnpm test:e2e
 | `docker-compose.demo.yml` | Isolated authenticated hosted-demo stack |
 | `scripts/demo-stack.sh` and `scripts/demo-seed.sql` | Demo lifecycle and deterministic reset data |
 
-## Public edition
+## Security and data boundary
 
-This repository is an independent sanitized publication. It contains no private Git history, personal subscriptions, production database, deployment credentials, Agent session files, or private infrastructure configuration. The hosted demo uses disposable, invented data and bounded quotas; production deployment details remain outside this repository.
+The repository and its examples contain no personal subscriptions, production database, deployment credentials, Agent session files, or private infrastructure configuration. Operators provide their own environment values, database, feed URLs, and HTTPS entry point. The hosted demo uses disposable, invented data and bounded quotas.
 
 ## License
 
