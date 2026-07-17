@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-fulltext-rss-reader}
       POSTGRES_USER: ${POSTGRES_USER:-fulltext-rss-reader}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fulltext-rss-reader}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -19,7 +19,8 @@ services:
     command: ["node", "server.js"]
     env_file: .env
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-fulltext-rss-reader}:${POSTGRES_PASSWORD:-fulltext-rss-reader}@postgres:5432/${POSTGRES_DB:-fulltext-rss-reader}
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-fulltext-rss-reader}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-fulltext-rss-reader}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -37,7 +38,8 @@ services:
     command: ["node", "--conditions=react-server", "dist/jobs/refresh-worker.mjs"]
     env_file: .env
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-fulltext-rss-reader}:${POSTGRES_PASSWORD:-fulltext-rss-reader}@postgres:5432/${POSTGRES_DB:-fulltext-rss-reader}
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-fulltext-rss-reader}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-fulltext-rss-reader}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -48,7 +50,8 @@ services:
     command: ["node", "--conditions=react-server", "dist/db/migrate.mjs"]
     env_file: .env
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-fulltext-rss-reader}:${POSTGRES_PASSWORD:-fulltext-rss-reader}@postgres:5432/${POSTGRES_DB:-fulltext-rss-reader}
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-fulltext-rss-reader}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-fulltext-rss-reader}
     depends_on:
       postgres:
         condition: service_healthy

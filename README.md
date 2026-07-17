@@ -4,7 +4,7 @@
 
 A deployable single-user RSS/Atom reader with full-text extraction, guarded remote fetching, and versioned appearance settings. The normal Docker Compose profile includes an independent refresh worker; the public hosted demo deliberately runs a reduced, quota-limited profile without that worker.
 
-[Live demo](https://rss-demo.713007.xyz/) | [Architecture](docs/architecture.md) | [Security](SECURITY.md)
+[Live demo](https://rss-demo.713007.xyz/) | [Self-hosting guide](docs/self-hosted.md) | [Architecture](docs/architecture.md) | [Security](SECURITY.md)
 
 ![CI](https://github.com/DTSFO/fulltext-rss-reader/actions/workflows/ci.yml/badge.svg)
 
@@ -42,6 +42,13 @@ The current public instance runs the authenticated hosted-demo profile with a di
 
 This is a shared public account. Do not add private, authenticated, or credential-bearing feed URLs. The demo is for feature evaluation only; it is not connected to a production database or control plane.
 
+## Deployment
+
+- For a private production installation with PostgreSQL, migrations, the web application, the refresh worker, HTTPS, backup/restore, and upgrade guidance, follow the [normal self-hosting guide](docs/self-hosted.md).
+- To operate a disposable shared instance with quotas, deterministic seed data, and no background worker, follow the [hosted-demo guide](docs/hosted-demo.md).
+
+The production Compose stack uses `.env.production.example`; `.env.example` is intentionally reserved for local development. Both stacks bind the application to a loopback host port by default, so the operator remains responsible for the public HTTPS entry point.
+
 ## Local development
 
 Requirements: Node.js 22, pnpm 11, Docker, and Docker Compose.
@@ -49,7 +56,9 @@ Requirements: Node.js 22, pnpm 11, Docker, and Docker Compose.
 ```bash
 cp .env.example .env
 pnpm install
-pnpm hash-password
+read -r -s -p "Reader password: " RSS_PASSWORD; printf '\n'
+printf '%s' "$RSS_PASSWORD" | pnpm hash-password
+unset RSS_PASSWORD
 docker compose up -d postgres
 pnpm db:migrate
 pnpm dev
@@ -86,7 +95,9 @@ pnpm test:e2e
 | `src/lib/http` | Guarded outbound HTTP access |
 | `src/db` and `drizzle` | Schema, migrations, and database access |
 | `tests` | Browser and integration scenarios |
-| `docker-compose.demo.yml` | Isolated authenticated hosted-demo stack |
+| `.env.production.example` and `docker-compose.yml` | Normal self-hosted production stack |
+| `docs/self-hosted.md` | Production deployment and operations guide |
+| `docker-compose.demo.yml` and `docs/hosted-demo.md` | Isolated authenticated hosted-demo stack and guide |
 | `scripts/demo-stack.sh` and `scripts/demo-seed.sql` | Demo lifecycle and deterministic reset data |
 
 ## Security and data boundary

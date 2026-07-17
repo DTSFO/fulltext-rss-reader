@@ -4,7 +4,7 @@
 
 一个可部署的单用户 RSS/Atom 全文阅读器，提供全文提取、受保护的远程内容抓取，以及可版本化的外观与主题设置。常规 Docker Compose 配置包含独立刷新 Worker；公开在线演示则有意使用不含 Worker、带配额限制的精简运行形态。
 
-[在线演示](https://rss-demo.713007.xyz/) | [架构说明](docs/architecture.md) | [安全策略](SECURITY.md)
+[在线演示](https://rss-demo.713007.xyz/) | [自托管部署指南](docs/self-hosted.zh-CN.md) | [架构说明](docs/architecture.md) | [安全策略](SECURITY.md)
 
 ![CI](https://github.com/DTSFO/fulltext-rss-reader/actions/workflows/ci.yml/badge.svg)
 
@@ -44,6 +44,13 @@
 
 这是共享公开账号，请勿添加私有、需要认证或包含访问凭据的订阅地址。该环境仅用于功能体验，不连接生产数据库或生产控制面。
 
+## 部署
+
+- 如需部署带 PostgreSQL、数据库迁移、Web、刷新 Worker、HTTPS、备份恢复和升级说明的私有生产实例，请阅读[常规自托管部署指南](docs/self-hosted.zh-CN.md)。
+- 如需运行带配额、确定性示例数据且不启动后台 Worker 的可丢弃共享实例，请阅读[在线演示部署指南](docs/hosted-demo.zh-CN.md)。
+
+生产 Compose 栈使用 `.env.production.example`；`.env.example` 只用于本地开发。两种栈默认都只把应用绑定到主机回环端口，公开 HTTPS 入口仍由部署方配置。
+
 ## 本地开发
 
 需要 Node.js 22、pnpm 11、Docker 与 Docker Compose。
@@ -51,7 +58,9 @@
 ```bash
 cp .env.example .env
 pnpm install
-pnpm hash-password
+read -r -s -p "Reader password: " RSS_PASSWORD; printf '\n'
+printf '%s' "$RSS_PASSWORD" | pnpm hash-password
+unset RSS_PASSWORD
 docker compose up -d postgres
 pnpm db:migrate
 pnpm dev
@@ -59,7 +68,7 @@ pnpm dev
 
 启动前，请用生成的 Argon2 哈希替换 `.env` 中故意设置的无效占位值。
 
-如需在 Linux 主机上运行隔离的认证演示，可使用 `docker-compose.demo.yml`，并按照[在线演示部署说明](docs/hosted-demo.md)执行确定性的重置与初始化流程。该栈只绑定回环端口，使用独立 PostgreSQL 数据卷，并且不启动后台刷新 Worker。HTTPS 发布与定时重置需要由部署方另行配置。
+如需在 Linux 主机上运行隔离的认证演示，可使用 `docker-compose.demo.yml`，并按照[在线演示部署说明](docs/hosted-demo.zh-CN.md)执行确定性的重置与初始化流程。该栈只绑定回环端口，使用独立 PostgreSQL 数据卷，并且不启动后台刷新 Worker。HTTPS 发布与定时重置需要由部署方另行配置。
 
 ## 质量检查
 
@@ -88,7 +97,9 @@ pnpm test:e2e
 | `src/lib/http` | 受保护的外部 HTTP 访问 |
 | `src/db` 与 `drizzle` | 数据库结构、迁移和访问层 |
 | `tests` | 浏览器测试与集成场景 |
-| `docker-compose.demo.yml` | 隔离的认证演示栈 |
+| `.env.production.example` 与 `docker-compose.yml` | 常规自托管生产栈 |
+| `docs/self-hosted.zh-CN.md` | 中文生产部署与运维指南 |
+| `docker-compose.demo.yml` 与 `docs/hosted-demo.zh-CN.md` | 隔离认证演示栈及中文指南 |
 | `scripts/demo-stack.sh` 与 `scripts/demo-seed.sql` | 演示环境生命周期与确定性数据重置 |
 
 ## 安全与数据边界

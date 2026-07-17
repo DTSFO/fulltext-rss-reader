@@ -25,6 +25,11 @@ demo-dist/
 .env.*
 !.env.example
 !.env.demo.example
+!.env.production.example
+
+# Local database backups
+backups/
+*.dump
 
 # Logs
 *.log
